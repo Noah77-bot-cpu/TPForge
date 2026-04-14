@@ -15,7 +15,7 @@ apt-get install -y -qq \
   mariadb-server \
   php php-mysql php-xml php-mbstring php-curl php-gd \
   php-intl php-ldap php-apcu php-zip php-bz2 \
-  php-imap php-cli php-fpm \
+  php-cli php-fpm \
   wget tar
 
 echo "==> Démarrage de MariaDB..."
