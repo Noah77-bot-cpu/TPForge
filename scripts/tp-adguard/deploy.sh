@@ -61,6 +61,8 @@ pct create "${CT_ID}" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
   --memory "${CT_RAM}" \
   --rootfs "${CT_STORAGE}:${CT_DISK}" \
   --net0 "name=eth0,bridge=${CT_BRIDGE},ip=dhcp" \
+  --nameserver "8.8.8.8 8.8.4.4" \
+  --searchdomain "local" \
   --onboot 1 \
   --unprivileged 1
 
