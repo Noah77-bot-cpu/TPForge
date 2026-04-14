@@ -18,7 +18,6 @@ CT_DISK=15
 CT_STORAGE="${CT_STORAGE:-local-lvm}"
 CT_BRIDGE="${CT_BRIDGE:-vmbr0}"
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
-TEMPLATE="debian-12-standard_12.7-1_amd64.tar.zst"
 
 # ── ID automatique ────────────────────────────────────────────────────────────
 echo "==> Recherche d'un ID CT libre..."
@@ -28,13 +27,29 @@ while pct status "$CT_ID" &>/dev/null 2>&1 || qm status "$CT_ID" &>/dev/null 2>&
 done
 echo "    ID retenu : ${CT_ID}"
 
-# ── Template Debian 12 ────────────────────────────────────────────────────────
+# ── Template Debian 12 (détection automatique) ────────────────────────────────
+echo "==> Mise à jour de la liste des templates..."
+pveam update
+
+echo "==> Recherche du template Debian 12 disponible..."
+TEMPLATE=$(pveam available --section system 2>/dev/null \
+  | awk '{print $2}' \
+  | grep -i "^debian-12" \
+  | sort -V | tail -1)
+
+if [ -z "${TEMPLATE}" ]; then
+  echo "ERREUR : aucun template Debian 12 trouvé dans pveam." >&2
+  echo "  Templates disponibles :" >&2
+  pveam available --section system 2>/dev/null | awk '{print "  " $2}' >&2
+  exit 1
+fi
+echo "    Template retenu : ${TEMPLATE}"
+
 if [ ! -f "/var/lib/vz/template/cache/${TEMPLATE}" ]; then
-  echo "==> Téléchargement du template Debian 12..."
-  pveam update
+  echo "==> Téléchargement du template..."
   pveam download "${TEMPLATE_STORAGE}" "${TEMPLATE}"
 else
-  echo "==> Template Debian 12 déjà disponible."
+  echo "==> Template déjà disponible."
 fi
 
 # ── Création du CT ────────────────────────────────────────────────────────────
