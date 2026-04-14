@@ -9,328 +9,217 @@ export default function App() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    async function loadScripts() {
+    async function load() {
       if (!config.owner || !config.repo) {
-        setError("Configure src/config.js avec le owner et le repo GitHub.");
+        setError("Configure src/config.js.");
         setIsLoading(false);
         return;
       }
-
       try {
         const folders = await fetchScriptFolders(config);
-        const items = await Promise.all(
-          folders.map((folder) => buildScriptEntry(config, folder))
-        );
+        const items = await Promise.all(folders.map((f) => buildScriptEntry(config, f)));
         setScripts(items.filter(Boolean));
       } catch (err) {
-        setError(err.message || "Impossible de charger les scripts depuis GitHub.");
+        setError(err.message || "Impossible de charger les scripts.");
       } finally {
         setIsLoading(false);
       }
     }
-
-    loadScripts();
+    load();
   }, []);
 
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredScripts = scripts.filter((item) => {
-    return (
-      !normalizedQuery ||
-      item.title.toLowerCase().includes(normalizedQuery) ||
-      item.description.toLowerCase().includes(normalizedQuery) ||
-      item.slug.toLowerCase().includes(normalizedQuery)
-    );
-  });
+  const filtered = scripts.filter(
+    (s) =>
+      !query.trim() ||
+      s.title.toLowerCase().includes(query.toLowerCase()) ||
+      s.description.toLowerCase().includes(query.toLowerCase()) ||
+      s.slug.toLowerCase().includes(query.toLowerCase())
+  );
 
-  async function copyCommand(slug, command) {
+  async function copy(slug, cmd) {
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(cmd);
       setCopiedSlug(slug);
-      window.setTimeout(() => setCopiedSlug(""), 1800);
-    } catch (err) {
-      window.alert("La copie automatique a echoue. Copie la commande manuellement.");
+      setTimeout(() => setCopiedSlug(""), 1800);
+    } catch {
+      alert("Copie manuelle nécessaire.");
     }
   }
 
   return (
-    <main className="app-shell">
-      <div className="app-shell__bg" />
-      <div className="app-shell__glow" />
-
-      <div className="app-shell__content">
-        <section className="hero-grid">
-          <div className="animate-rise">
-            <p className="eyebrow">
-              GitHub script index
-            </p>
-            <h1 className="hero-title">
-              TPForge lit automatiquement les scripts presents dans
-              <span className="hero-title__accent"> GitHub </span>
-              et affiche leur commande de deploiement.
-            </h1>
-            <p className="hero-copy">
-              Chaque script vit dans son dossier avec un fichier Markdown pour
-              le descriptif et un fichier shell pour l installation.
-            </p>
+    <div className="shell">
+      <header className="header">
+        <div className="header__inner">
+          <div className="brand">
+            <span className="brand__icon">⚒</span>
+            <span className="brand__name">TPForge</span>
           </div>
-
-          <aside className="panel animate-rise">
-            <p className="panel-label">
-              Configuration
-            </p>
-            <div className="stats-grid">
-              <StatCard
-                label="Repository"
-                value={`${config.owner || "owner"}/${config.repo || "repo"}`}
-              />
-              <StatCard label="Branche" value={config.branch || "main"} />
-              <StatCard label="Scripts detectes" value={scripts.length} />
-            </div>
-          </aside>
-        </section>
-
-        <section className="search-panel animate-rise">
-          <div className="search-grid">
-            <label className="search-input">
-              <span className="search-input__label">Rechercher</span>
-              <input
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Nom du dossier, titre, description..."
-                className="search-input__field"
-              />
-            </label>
-
-            <div className="search-meta">
-              Dossier surveille:{" "}
-              <span className="search-meta__path">
-                {config.scriptsPath || "scripts"}
+          <div className="header__pills">
+            <span className="pill">{config.owner}/{config.repo}</span>
+            <span className="pill">{config.branch}</span>
+            {!isLoading && (
+              <span className="pill pill--gold">
+                {scripts.length} script{scripts.length !== 1 ? "s" : ""}
               </span>
-            </div>
+            )}
           </div>
-        </section>
+        </div>
+      </header>
 
-        <section className="results-section">
-          {isLoading ? (
-            <div className="cards-grid">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="skeleton-card"
-                />
-              ))}
-            </div>
-          ) : error ? (
-            <div className="feedback-card feedback-card--error">
-              {error}
-            </div>
-          ) : filteredScripts.length === 0 ? (
-            <div className="feedback-card feedback-card--empty">
-              Aucun script trouve pour cette recherche.
-            </div>
-          ) : (
-            <div className="cards-grid">
-              {filteredScripts.map((item, index) => (
-                <article
-                  key={item.slug}
-                  className="script-card"
-                  style={{ animationDelay: `${index * 90}ms` }}
-                >
-                  <div className="script-card__header">
-                    <div>
-                      <p className="script-card__slug">
-                        {item.slug}
-                      </p>
-                      <h2 className="script-card__title">
-                        {item.title}
-                      </h2>
-                    </div>
-                    <a
-                      href={item.folderUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="pill-link"
-                    >
-                      Ouvrir
-                    </a>
-                  </div>
-
-                  <p className="script-card__description">
-                    {item.description}
-                  </p>
-
-                  <div className="script-card__files">
-                    Fichiers: {item.metaFileName} + {item.scriptFileName}
-                  </div>
-
-                  <div className="script-card__command">
-                    <p className="script-card__command-label">
-                      Commande curl
-                    </p>
-                    <pre className="script-card__command-text">
-                      <code>{item.curlCommand}</code>
-                    </pre>
-                  </div>
-
-                  <div className="script-card__actions">
-                    <button
-                      type="button"
-                      onClick={() => copyCommand(item.slug, item.curlCommand)}
-                      className="primary-button"
-                    >
-                      {copiedSlug === item.slug
-                        ? "Commande copiee"
-                        : "Copier la commande"}
-                    </button>
-                    <a
-                      href={item.rawScriptUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="secondary-link"
-                    >
-                      Voir le .sh
-                    </a>
-                  </div>
-                </article>
-              ))}
-            </div>
+      <div className="search-zone">
+        <div className="search-bar">
+          <svg className="search-bar__icon" viewBox="0 0 20 20" fill="currentColor">
+            <path
+              fillRule="evenodd"
+              d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Rechercher un script..."
+            className="search-bar__input"
+          />
+          {query && (
+            <button className="search-bar__clear" onClick={() => setQuery("")}>
+              ✕
+            </button>
           )}
-        </section>
+        </div>
       </div>
-    </main>
-  );
-}
 
-function StatCard({ label, value }) {
-  return (
-    <div className="stat-card">
-      <p className="stat-card__label">{label}</p>
-      <p className="stat-card__value">{value}</p>
+      <main className="main">
+        {isLoading ? (
+          <div className="grid">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="skeleton" style={{ animationDelay: `${i * 120}ms` }} />
+            ))}
+          </div>
+        ) : error ? (
+          <div className="notice notice--error">{error}</div>
+        ) : filtered.length === 0 ? (
+          <div className="notice">Aucun résultat pour « {query} ».</div>
+        ) : (
+          <div className="grid">
+            {filtered.map((item, i) => (
+              <article
+                key={item.slug}
+                className="card"
+                style={{ animationDelay: `${i * 70}ms` }}
+              >
+                <div className="card__head">
+                  <div>
+                    <p className="card__slug">{item.slug}</p>
+                    <h2 className="card__title">{item.title}</h2>
+                  </div>
+                  <a
+                    href={item.folderUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="card__github"
+                  >
+                    GitHub ↗
+                  </a>
+                </div>
+
+                <p className="card__desc">{item.description}</p>
+
+                <div className="card__cmd">
+                  <code>{item.curlCommand}</code>
+                </div>
+
+                <div className="card__foot">
+                  <button
+                    onClick={() => copy(item.slug, item.curlCommand)}
+                    className={`btn-copy${copiedSlug === item.slug ? " btn-copy--done" : ""}`}
+                  >
+                    {copiedSlug === item.slug ? "✓ Copié !" : "Copier la commande"}
+                  </button>
+                  <a
+                    href={item.rawScriptUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-raw"
+                  >
+                    .sh ↗
+                  </a>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
 
-async function fetchScriptFolders(appConfig) {
-  const apiUrl = buildContentsApiUrl(appConfig, appConfig.scriptsPath || "scripts");
-  const response = await fetch(apiUrl, {
+async function fetchScriptFolders(cfg) {
+  const res = await fetch(buildApiUrl(cfg, cfg.scriptsPath || "scripts"), {
     headers: { Accept: "application/vnd.github+json" },
   });
-
-  if (!response.ok) {
-    throw new Error(
-      "Impossible de lire le dossier scripts depuis GitHub. Verifie owner, repo, branche et visibilite."
-    );
-  }
-
-  const data = await response.json();
-  return data.filter((entry) => entry.type === "dir");
+  if (!res.ok) throw new Error("Impossible de lire les scripts depuis GitHub.");
+  const data = await res.json();
+  return data.filter((e) => e.type === "dir");
 }
 
-async function buildScriptEntry(appConfig, folder) {
-  const folderPath = folder.path;
-  const folderContents = await fetchFolderContents(appConfig, folderPath);
-  const metaFile = folderContents.find(
-    (item) => item.type === "file" && item.name.toLowerCase().endsWith(".md")
-  );
-  const scriptFile = folderContents.find(
-    (item) => item.type === "file" && item.name.toLowerCase().endsWith(".sh")
-  );
+async function buildScriptEntry(cfg, folder) {
+  const contents = await fetchFolder(cfg, folder.path);
+  const meta = contents.find((f) => f.type === "file" && f.name.toLowerCase().endsWith(".md"));
+  const sh = contents.find((f) => f.type === "file" && f.name.toLowerCase().endsWith(".sh"));
+  if (!meta || !sh) return null;
 
-  if (!metaFile || !scriptFile) {
-    return null;
-  }
-
-  const metadataText = await fetchTextFile(metaFile.download_url);
-  const metadata = parseMetadata(metadataText);
+  const text = await fetchText(meta.download_url);
+  const parsed = parseMeta(text);
 
   return {
     slug: folder.name,
-    title: metadata.title || prettifySlug(folder.name),
-    description:
-      metadata.description || "Aucune description trouvee dans le Markdown.",
-    curlCommand: buildCurlCommand(appConfig, scriptFile.path),
-    folderUrl: buildGithubTreeUrl(appConfig, folderPath),
-    rawScriptUrl: scriptFile.download_url,
-    metaFileName: metaFile.name,
-    scriptFileName: scriptFile.name,
+    title: parsed.title || prettify(folder.name),
+    description: parsed.description || "",
+    curlCommand: buildCurl(cfg, sh.path),
+    folderUrl: `https://github.com/${cfg.owner}/${cfg.repo}/tree/${cfg.branch}/${folder.path}`,
+    rawScriptUrl: sh.download_url,
   };
 }
 
-async function fetchFolderContents(appConfig, folderPath) {
-  const response = await fetch(buildContentsApiUrl(appConfig, folderPath), {
+async function fetchFolder(cfg, path) {
+  const res = await fetch(buildApiUrl(cfg, path), {
     headers: { Accept: "application/vnd.github+json" },
   });
-
-  if (!response.ok) {
-    throw new Error(`Impossible de lire le dossier ${folderPath} sur GitHub.`);
-  }
-
-  return response.json();
+  if (!res.ok) throw new Error(`Impossible de lire ${path}`);
+  return res.json();
 }
 
-async function fetchTextFile(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error("Impossible de telecharger un fichier distant.");
-  }
-
-  return response.text();
+async function fetchText(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Impossible de télécharger le fichier.");
+  return res.text();
 }
 
-function parseMetadata(markdown) {
-  const lines = markdown.split(/\r?\n/);
+function parseMeta(md) {
+  const lines = md.split(/\r?\n/);
   let title = "";
   let description = "";
-
-  lines.forEach((line) => {
-    if (!title && line.toLowerCase().startsWith("title:")) {
-      title = line.slice(6).trim();
-      return;
-    }
-
-    if (!description && line.toLowerCase().startsWith("description:")) {
-      description = line.slice(12).trim();
-    }
-  });
-
+  for (const line of lines) {
+    if (!title && line.toLowerCase().startsWith("title:")) title = line.slice(6).trim();
+    if (!description && line.toLowerCase().startsWith("description:")) description = line.slice(12).trim();
+  }
   if (!title) {
-    const heading = lines.find((line) => line.trim().startsWith("# "));
-    if (heading) {
-      title = heading.replace(/^#\s+/, "").trim();
-    }
+    const h = lines.find((l) => l.trimStart().startsWith("# "));
+    if (h) title = h.replace(/^#\s+/, "").trim();
   }
-
-  if (!description) {
-    const paragraph = lines.find(
-      (line) => line.trim() && !line.trim().startsWith("#")
-    );
-    if (paragraph) {
-      description = paragraph.trim();
-    }
-  }
-
   return { title, description };
 }
 
-function buildContentsApiUrl(appConfig, path) {
-  const base = `https://api.github.com/repos/${appConfig.owner}/${appConfig.repo}/contents/${path}`;
-  return `${base}?ref=${encodeURIComponent(appConfig.branch || "main")}`;
+function buildApiUrl(cfg, path) {
+  return `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}?ref=${encodeURIComponent(cfg.branch || "main")}`;
 }
 
-function buildGithubTreeUrl(appConfig, path) {
-  return `https://github.com/${appConfig.owner}/${appConfig.repo}/tree/${appConfig.branch || "main"}/${path}`;
+function buildCurl(cfg, scriptPath) {
+  return `curl -fsSL https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${cfg.branch || "main"}/${scriptPath} | bash`;
 }
 
-function buildCurlCommand(appConfig, scriptPath) {
-  const rawUrl = `https://raw.githubusercontent.com/${appConfig.owner}/${appConfig.repo}/${appConfig.branch || "main"}/${scriptPath}`;
-  return `curl -fsSL ${rawUrl} | bash`;
-}
-
-function prettifySlug(slug) {
-  return slug
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function prettify(slug) {
+  return slug.split(/[-_]/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 }

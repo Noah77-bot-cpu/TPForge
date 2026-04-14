@@ -1,7 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── Variables ────────────────────────────────────────────────────────────────
+# ── Vérifications ─────────────────────────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+  echo "ERREUR : root requis." >&2; exit 1
+fi
+if ! command -v pct &>/dev/null; then
+  echo "ERREUR : lance ce script directement sur le nœud Proxmox." >&2; exit 1
+fi
+
+# ── Config CT ─────────────────────────────────────────────────────────────────
+CT_HOSTNAME="glpi"
+CT_PASSWORD="changeme"
+CT_CORES=2
+CT_RAM=2048
+CT_DISK=15
+CT_STORAGE="${CT_STORAGE:-local-lvm}"
+CT_BRIDGE="${CT_BRIDGE:-vmbr0}"
+TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
+TEMPLATE="debian-12-standard_12.7-1_amd64.tar.zst"
+
+# ── ID automatique ────────────────────────────────────────────────────────────
+echo "==> Recherche d'un ID CT libre..."
+CT_ID=100
+while pct status "$CT_ID" &>/dev/null 2>&1 || qm status "$CT_ID" &>/dev/null 2>&1; do
+  CT_ID=$((CT_ID + 1))
+done
+echo "    ID retenu : ${CT_ID}"
+
+# ── Template Debian 12 ────────────────────────────────────────────────────────
+if [ ! -f "/var/lib/vz/template/cache/${TEMPLATE}" ]; then
+  echo "==> Téléchargement du template Debian 12..."
+  pveam update
+  pveam download "${TEMPLATE_STORAGE}" "${TEMPLATE}"
+else
+  echo "==> Template Debian 12 déjà disponible."
+fi
+
+# ── Création du CT ────────────────────────────────────────────────────────────
+echo "==> Création du CT ${CT_ID} (${CT_HOSTNAME})..."
+pct create "${CT_ID}" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
+  --hostname "${CT_HOSTNAME}" \
+  --password "${CT_PASSWORD}" \
+  --cores "${CT_CORES}" \
+  --memory "${CT_RAM}" \
+  --rootfs "${CT_STORAGE}:${CT_DISK}" \
+  --net0 "name=eth0,bridge=${CT_BRIDGE},ip=dhcp" \
+  --onboot 1 \
+  --features nesting=1 \
+  --unprivileged 1
+
+echo "==> Démarrage du CT..."
+pct start "${CT_ID}"
+sleep 6
+
+# ── Script d'installation à exécuter dans le CT ───────────────────────────────
+cat > /tmp/glpi_inner.sh << 'INNER'
+#!/usr/bin/env bash
+set -euo pipefail
+
 GLPI_VERSION="10.0.16"
 GLPI_ARCHIVE="glpi-${GLPI_VERSION}.tgz"
 GLPI_URL="https://github.com/glpi-project/glpi/releases/download/${GLPI_VERSION}/${GLPI_ARCHIVE}"
@@ -10,113 +67,93 @@ DB_NAME="glpi"
 DB_USER="glpi"
 DB_PASS="glpi_password"
 
-# ── Vérifications ─────────────────────────────────────────────────────────────
-if [ "$(id -u)" -ne 0 ]; then
-  echo "ERREUR : ce script doit être lancé en root." >&2
-  exit 1
-fi
-
-# ── Dépôts Debian (Proxmox n'active pas toujours les dépôts complets) ────────
-echo "==> Vérification des dépôts Debian..."
+echo "[CT] Ajout des dépôts Debian complets..."
 SOURCES="/etc/apt/sources.list"
-if ! grep -q "^deb http://deb.debian.org/debian bookworm main" "$SOURCES" 2>/dev/null; then
-  echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" >> "$SOURCES"
-  echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" >> "$SOURCES"
-  echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" >> "$SOURCES"
-  echo "  Dépôts Debian ajoutés."
+if ! grep -q "deb.debian.org" "$SOURCES" 2>/dev/null; then
+  cat >> "$SOURCES" << REPOS
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security bookworm-security main contrib
+REPOS
 fi
 
-echo "==> Mise à jour des paquets..."
-apt-get update -y
+echo "[CT] Mise à jour..."
+apt-get update -y -qq
 
-# ── Apache + MariaDB + PHP ────────────────────────────────────────────────────
-echo "==> Installation d'Apache, MariaDB et PHP..."
+echo "[CT] Installation Apache + MariaDB + PHP..."
 apt-get install -y \
-  apache2 \
-  mariadb-server \
-  php \
-  php-mysql \
-  php-xml \
-  php-mbstring \
-  php-curl \
-  php-gd \
-  php-intl \
-  php-zip \
-  php-bz2 \
-  php-cli \
-  php-ldap \
-  wget \
-  tar
+  apache2 mariadb-server \
+  php php-mysql php-xml php-mbstring php-curl php-gd \
+  php-intl php-zip php-bz2 php-cli php-ldap \
+  wget tar
 
-# Extensions vraiment optionnelles
-echo "==> Extensions PHP optionnelles (ignorées si absentes)..."
-for pkg in php-apcu php-imap; do
-  if apt-get install -y "$pkg" 2>/dev/null; then
-    echo "  ✓ $pkg installé"
-  else
-    echo "  - $pkg non disponible, ignoré"
-  fi
+echo "[CT] Extensions optionnelles..."
+for pkg in php-apcu; do
+  apt-get install -y "$pkg" 2>/dev/null && echo "  ✓ $pkg" || echo "  - $pkg ignoré"
 done
 
-# ── MariaDB ───────────────────────────────────────────────────────────────────
-echo "==> Démarrage de MariaDB..."
+echo "[CT] Démarrage MariaDB..."
 systemctl enable mariadb
 systemctl start mariadb
 
-echo "==> Création de la base de données GLPI..."
-mysql -u root <<SQL
-CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+echo "[CT] Création de la base de données..."
+mysql -u root << SQL
+CREATE DATABASE IF NOT EXISTS glpi CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'glpi'@'localhost' IDENTIFIED BY 'glpi_password';
+GRANT ALL PRIVILEGES ON glpi.* TO 'glpi'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 
-# ── GLPI ──────────────────────────────────────────────────────────────────────
-echo "==> Téléchargement de GLPI ${GLPI_VERSION}..."
+echo "[CT] Téléchargement de GLPI ${GLPI_VERSION}..."
 wget -q --show-progress -O "/tmp/${GLPI_ARCHIVE}" "${GLPI_URL}"
 
-echo "==> Extraction dans ${WEBROOT}..."
+echo "[CT] Extraction..."
 tar -xzf "/tmp/${GLPI_ARCHIVE}" -C /var/www/html/
 rm -f "/tmp/${GLPI_ARCHIVE}"
 
-echo "==> Application des permissions..."
 chown -R www-data:www-data "${WEBROOT}"
 find "${WEBROOT}" -type d -exec chmod 755 {} \;
 find "${WEBROOT}" -type f -exec chmod 644 {} \;
 
-# ── Apache ────────────────────────────────────────────────────────────────────
-echo "==> Configuration d'Apache..."
-cat > /etc/apache2/sites-available/glpi.conf <<'VHOST'
+echo "[CT] Configuration Apache..."
+cat > /etc/apache2/sites-available/glpi.conf << VHOST
 <VirtualHost *:80>
     DocumentRoot /var/www/html/glpi/public
     <Directory /var/www/html/glpi/public>
         AllowOverride All
         Require all granted
     </Directory>
-    ErrorLog ${APACHE_LOG_DIR}/glpi_error.log
-    CustomLog ${APACHE_LOG_DIR}/glpi_access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/glpi_error.log
+    CustomLog \${APACHE_LOG_DIR}/glpi_access.log combined
 </VirtualHost>
 VHOST
 
 a2ensite glpi.conf
 a2enmod rewrite
 a2dissite 000-default.conf 2>/dev/null || true
-
 systemctl enable apache2
 systemctl restart apache2
 
+echo "[CT] Installation terminée."
+INNER
+
+# ── Exécution dans le CT ──────────────────────────────────────────────────────
+echo "==> Copie et exécution du script dans le CT ${CT_ID}..."
+pct push "${CT_ID}" /tmp/glpi_inner.sh /tmp/install.sh --perms 0755
+pct exec "${CT_ID}" -- bash /tmp/install.sh
+
 # ── Résumé ────────────────────────────────────────────────────────────────────
-IP=$(hostname -I | awk '{print $1}')
+CT_IP=$(pct exec "${CT_ID}" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "voir Proxmox")
 echo ""
 echo "============================================="
-echo "  GLPI ${GLPI_VERSION} installé avec succès !"
+echo "  GLPI installé dans le CT ${CT_ID} !"
 echo "============================================="
 echo ""
-echo "  URL             : http://${IP}"
-echo "  Hôte DB         : localhost"
-echo "  Nom DB          : ${DB_NAME}"
-echo "  Utilisateur DB  : ${DB_USER}"
-echo "  Mot de passe DB : ${DB_PASS}"
+echo "  CT ID           : ${CT_ID}"
+echo "  URL GLPI        : http://${CT_IP}"
+echo "  DB Name         : glpi"
+echo "  DB User         : glpi"
+echo "  DB Password     : glpi_password"
 echo ""
-echo "  Ouvre l'URL dans un navigateur pour finaliser l'installation."
+echo "  Accès shell     : pct enter ${CT_ID}"
 echo ""
