@@ -14,9 +14,11 @@ apt-get install -y -qq \
   apache2 \
   mariadb-server \
   php php-mysql php-xml php-mbstring php-curl php-gd \
-  php-intl php-ldap php-apcu php-zip php-bz2 \
-  php-cli php-fpm \
+  php-intl php-zip php-cli \
   wget tar
+
+echo "==> Installation des extensions PHP optionnelles..."
+apt-get install -y -qq php-ldap php-apcu php-bz2 2>/dev/null || true
 
 echo "==> Démarrage de MariaDB..."
 systemctl enable --now mariadb
