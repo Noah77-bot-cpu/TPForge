@@ -25,8 +25,17 @@ DNS_FORWARDER_1="${DNS_FORWARDER_1:-8.8.8.8}"
 DNS_FORWARDER_2="${DNS_FORWARDER_2:-1.1.1.1}"
 
 if [[ "${SITE_NAME}" == *.* ]]; then
-  SITE_FQDN="${SITE_NAME}"
-  SITE_HOST="${SITE_NAME%%.*}"
+  case "${SITE_NAME}" in
+    *".${LAB_DOMAIN}")
+      SITE_FQDN="${SITE_NAME}"
+      SITE_HOST="${SITE_NAME%.${LAB_DOMAIN}}"
+      SITE_HOST="${SITE_HOST%.}"
+      ;;
+    *)
+      echo "ERREUR : SITE_NAME doit etre un sous-domaine (ex: monsite) ou finir par .${LAB_DOMAIN}." >&2
+      exit 1
+      ;;
+  esac
 else
   SITE_HOST="${SITE_NAME}"
   SITE_FQDN="${SITE_NAME}.${LAB_DOMAIN}"
@@ -106,8 +115,15 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   bind9 bind9-utils bind9-dnsutils dnsutils \
   apache2 nginx curl
 
-CT_IP=\$(hostname -I | awk '{print \$1}')
-if [ -z "\${CT_IP}" ]; then
+# Nginx demarre souvent automatiquement avec le site par defaut sur :80.
+# On le coupe tout de suite pour eviter le conflit avec Apache pendant la suite.
+systemctl stop nginx >/dev/null 2>&1 || true
+rm -f /etc/nginx/sites-enabled/default
+
+IP_CIDR=\$(ip -o -4 addr show scope global | awk '{print \$4; exit}')
+CT_IP=\${IP_CIDR%%/*}
+PREFIX_LEN=\${IP_CIDR##*/}
+if [ -z "\${CT_IP}" ] || [ -z "\${PREFIX_LEN}" ]; then
   echo "[CT] ERREUR : impossible de detecter l'adresse IP du CT." >&2
   exit 1
 fi
@@ -115,7 +131,7 @@ fi
 IFS='.' read -r OCT1 OCT2 OCT3 OCT4 <<< "\${CT_IP}"
 REV_ZONE="\${OCT3}.\${OCT2}.\${OCT1}.in-addr.arpa"
 REV_FILE="/etc/bind/zones/db.\${OCT1}.\${OCT2}.\${OCT3}"
-LAN_CIDR="\${OCT1}.\${OCT2}.\${OCT3}.0/24"
+LAN_CIDR="\${OCT1}.\${OCT2}.\${OCT3}.0/\${PREFIX_LEN}"
 SERIAL=\$(date +%Y%m%d%H)
 
 echo "[CT] Configuration BIND9 pour \${SITE_FQDN} -> \${CT_IP}..."
@@ -162,6 +178,7 @@ cat > /etc/bind/zones/db.${LAB_DOMAIN} <<EOF
                     604800 )   ; Negative Cache TTL
 
 @       IN  NS      ${NS_FQDN}.
+@       IN  A       \${CT_IP}
 ns      IN  A       \${CT_IP}
 ${SITE_HOST}  IN  A \${CT_IP}
 www.${SITE_HOST} IN A \${CT_IP}
@@ -187,6 +204,7 @@ systemctl enable bind9
 systemctl restart bind9
 
 echo "[CT] Resolver local..."
+rm -f /etc/resolv.conf
 cat > /etc/resolv.conf <<EOF
 nameserver 127.0.0.1
 search ${LAB_DOMAIN}
@@ -291,10 +309,9 @@ a2dissite 000-default.conf >/dev/null 2>&1 || true
 a2ensite ${SITE_SLUG}.conf >/dev/null
 apache2ctl configtest
 systemctl enable apache2
-systemctl reload apache2
+systemctl restart apache2
 
 echo "[CT] Configuration Nginx..."
-rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf <<EOF
 server {
     listen 8080;
@@ -320,6 +337,8 @@ systemctl restart nginx
 
 echo "[CT] Validations locales..."
 dig @127.0.0.1 ${SITE_FQDN} +short
+dig @127.0.0.1 -x "\${CT_IP}" +short
+dig @127.0.0.1 google.com +short >/dev/null
 curl -fsSI "http://127.0.0.1" >/dev/null
 curl -fsSI "http://\${CT_IP}:8080" >/dev/null
 
