@@ -71,6 +71,11 @@ Variables utiles :
 - l'URL Apache2 sur le domaine local
 - l'URL Nginx sur `http://IP:8080`
 
+Identifiants par défaut du conteneur :
+
+- login : `root`
+- mot de passe : `Formation13@`
+
 Exemples de tests :
 
 ```bash

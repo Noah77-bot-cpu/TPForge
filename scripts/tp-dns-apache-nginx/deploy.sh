@@ -12,7 +12,7 @@ if ! command -v pct >/dev/null 2>&1; then
 fi
 
 CT_HOSTNAME="${CT_HOSTNAME:-dns-web}"
-CT_PASSWORD="${CT_PASSWORD:-changeme}"
+CT_PASSWORD="${CT_PASSWORD:-Formation13@}"
 CT_CORES="${CT_CORES:-2}"
 CT_RAM="${CT_RAM:-1024}"
 CT_DISK="${CT_DISK:-6}"
