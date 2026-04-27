@@ -118,7 +118,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 # Nginx demarre souvent automatiquement avec le site par defaut sur :80.
 # On le coupe tout de suite pour eviter le conflit avec Apache pendant la suite.
 systemctl stop nginx >/dev/null 2>&1 || true
+systemctl disable nginx >/dev/null 2>&1 || true
 rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-available/default
 
 IP_CIDR=\$(ip -o -4 addr show scope global | awk '{print \$4; exit}')
 CT_IP=\${IP_CIDR%%/*}
@@ -212,6 +214,18 @@ EOF
 
 echo "[CT] Configuration Apache2..."
 mkdir -p /var/www/${SITE_SLUG}
+cat > /etc/apache2/ports.conf <<EOF
+Listen 80
+
+<IfModule ssl_module>
+    Listen 443
+</IfModule>
+
+<IfModule mod_gnutls.c>
+    Listen 443
+</IfModule>
+EOF
+
 cat > /var/www/${SITE_SLUG}/index.html <<EOF
 <!doctype html>
 <html lang="fr">
@@ -291,6 +305,7 @@ cat > /etc/apache2/sites-available/${SITE_SLUG}.conf <<EOF
 <VirtualHost *:80>
     ServerName ${SITE_FQDN}
     ServerAlias www.${SITE_FQDN}
+    ServerAdmin admin@${LAB_DOMAIN}
 
     DocumentRoot /var/www/${SITE_SLUG}
 
@@ -310,11 +325,14 @@ a2ensite ${SITE_SLUG}.conf >/dev/null
 apache2ctl configtest
 systemctl enable apache2
 systemctl restart apache2
+ss -tlnp | grep ':80' >/dev/null
 
 echo "[CT] Configuration Nginx..."
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 cat > /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf <<EOF
 server {
     listen 8080;
+    listen [::]:8080;
     server_name ${SITE_FQDN} \${CT_IP};
 
     access_log /var/log/nginx/${SITE_SLUG}_access.log;
@@ -322,10 +340,15 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:80;
-        proxy_set_header Host              \$host;
+        proxy_http_version 1.1;
+        proxy_set_header Host              \$http_host;
         proxy_set_header X-Real-IP         \$remote_addr;
         proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host  \$host;
+        proxy_set_header X-Forwarded-Port  \$server_port;
+        proxy_set_header X-Forwarded-Server \$server_name;
+        proxy_set_header Connection "";
     }
 }
 EOF
@@ -334,12 +357,14 @@ ln -sf /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf /etc/nginx/sites-enabl
 nginx -t
 systemctl enable nginx
 systemctl restart nginx
+ss -tlnp | grep ':8080' >/dev/null
 
 echo "[CT] Validations locales..."
 dig @127.0.0.1 ${SITE_FQDN} +short
 dig @127.0.0.1 -x "\${CT_IP}" +short
 dig @127.0.0.1 google.com +short >/dev/null
 curl -fsSI "http://127.0.0.1" >/dev/null
+curl -fsSI -H "Host: ${SITE_FQDN}" "http://127.0.0.1" >/dev/null
 curl -fsSI "http://\${CT_IP}:8080" >/dev/null
 
 echo "[CT] Installation terminee."
