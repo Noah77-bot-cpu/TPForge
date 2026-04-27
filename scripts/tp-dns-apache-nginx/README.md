@@ -1,10 +1,9 @@
-# TP DNS + Apache2 + Nginx
+# TP DNS + Apache2
 
 Déploie automatiquement un conteneur **Debian 12** sur **Proxmox VE** avec :
 
 - **BIND9** pour la résolution DNS locale
 - **Apache2** pour héberger `monsite.lab.local`
-- **Nginx** en reverse proxy sur le port `8080`
 
 Le script reprend l'esprit du guide manuel et automatise toute la mise en place dans un seul CT LXC.
 
@@ -13,12 +12,11 @@ Le script reprend l'esprit du guide manuel et automatise toute la mise en place 
 ## Ce que le script configure
 
 - création d'un CT LXC Debian 12 avec ID libre automatique
-- installation de `bind9`, `apache2`, `nginx`, `dnsutils`
+- installation de `bind9`, `apache2`, `dnsutils`
 - détection de l'IP du conteneur
 - création d'une zone DNS locale `lab.local`
 - création d'une zone inverse adaptée à l'IP réelle du CT
 - publication d'une page web sur Apache2
-- exposition de cette page via Nginx sur `:8080`
 - vérifications de syntaxe et tests rapides en fin d'installation
 
 ---
@@ -69,7 +67,6 @@ Variables utiles :
 - son IP
 - le FQDN local créé
 - l'URL Apache2 sur le domaine local
-- l'URL Nginx sur `http://IP:8080`
 
 Identifiants par défaut du conteneur :
 
@@ -82,7 +79,7 @@ Exemples de tests :
 pct enter <CT_ID>
 dig @127.0.0.1 monsite.lab.local
 curl -I http://monsite.lab.local
-curl -I http://<IP_DU_CT>:8080
+curl -I http://<IP_DU_CT>
 ```
 
 ---

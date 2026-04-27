@@ -94,12 +94,11 @@ echo "==> Demarrage du CT..."
 pct start "${CT_ID}"
 sleep 8
 
-cat > /tmp/dns_apache_nginx_inner.sh <<INNER
+cat > /tmp/dns_apache_inner.sh <<INNER
 #!/usr/bin/env bash
 set -euo pipefail
 
 LAB_DOMAIN="${LAB_DOMAIN}"
-SITE_NAME="${SITE_NAME}"
 SITE_HOST="${SITE_HOST}"
 SITE_FQDN="${SITE_FQDN}"
 SITE_SLUG="${SITE_SLUG}"
@@ -113,14 +112,7 @@ apt-get update -y -qq
 echo "[CT] Installation des paquets..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   bind9 bind9-utils bind9-dnsutils dnsutils \
-  apache2 nginx curl
-
-# Nginx demarre souvent automatiquement avec le site par defaut sur :80.
-# On le coupe tout de suite pour eviter le conflit avec Apache pendant la suite.
-systemctl stop nginx >/dev/null 2>&1 || true
-systemctl disable nginx >/dev/null 2>&1 || true
-rm -f /etc/nginx/sites-enabled/default
-rm -f /etc/nginx/sites-available/default
+  apache2 curl
 
 IP_CIDR=\$(ip -o -4 addr show scope global | awk '{print \$4; exit}')
 CT_IP=\${IP_CIDR%%/*}
@@ -136,7 +128,7 @@ REV_FILE="/etc/bind/zones/db.\${OCT1}.\${OCT2}.\${OCT3}"
 LAN_CIDR="\${OCT1}.\${OCT2}.\${OCT3}.0/\${PREFIX_LEN}"
 SERIAL=\$(date +%Y%m%d%H)
 
-echo "[CT] Configuration BIND9 pour \${SITE_FQDN} -> \${CT_IP}..."
+echo "[CT] Configuration BIND9..."
 mkdir -p /etc/bind/zones
 
 cat > /etc/bind/named.conf.options <<EOF
@@ -149,12 +141,12 @@ options {
     };
 
     allow-query { localhost; \${LAN_CIDR}; };
+    allow-recursion { localhost; \${LAN_CIDR}; };
+    recursion yes;
+    forward only;
+    dnssec-validation no;
     listen-on { any; };
     listen-on-v6 { any; };
-    recursion yes;
-    allow-recursion { localhost; \${LAN_CIDR}; };
-    dnssec-validation no;
-    forward only;
 };
 EOF
 
@@ -180,9 +172,8 @@ cat > /etc/bind/zones/db.${LAB_DOMAIN} <<EOF
                     604800 )   ; Negative Cache TTL
 
 @       IN  NS      ${NS_FQDN}.
-@       IN  A       \${CT_IP}
 ns      IN  A       \${CT_IP}
-${SITE_HOST}  IN  A \${CT_IP}
+${SITE_HOST} IN  A  \${CT_IP}
 www.${SITE_HOST} IN A \${CT_IP}
 EOF
 
@@ -213,7 +204,6 @@ search ${LAB_DOMAIN}
 EOF
 
 echo "[CT] Configuration Apache2..."
-mkdir -p /var/www/${SITE_SLUG}
 cat > /etc/apache2/ports.conf <<EOF
 Listen 80
 
@@ -226,6 +216,7 @@ Listen 80
 </IfModule>
 EOF
 
+mkdir -p /var/www/${SITE_SLUG}
 cat > /var/www/${SITE_SLUG}/index.html <<EOF
 <!doctype html>
 <html lang="fr">
@@ -283,19 +274,18 @@ cat > /var/www/${SITE_SLUG}/index.html <<EOF
       <p>TP automatise</p>
       <h1>${SITE_FQDN}</h1>
       <p>
-        Apache2 sert cette page sur le port 80, Nginx la publie en reverse proxy
-        sur le port 8080, et BIND9 resout le nom de domaine local.
+        Apache2 sert cette page sur le port 80, et BIND9 resout le nom de domaine local.
       </p>
       <div class="stack">
         <span class="pill">DNS: ${SITE_FQDN}</span>
         <span class="pill">IP: <code>\${CT_IP}</code></span>
         <span class="pill">Apache2:80</span>
-        <span class="pill">Nginx:8080</span>
+        <span class="pill">BIND9:53</span>
       </div>
       <p>Tests rapides :</p>
       <p><code>dig @127.0.0.1 ${SITE_FQDN}</code></p>
       <p><code>curl -I http://${SITE_FQDN}</code></p>
-      <p><code>curl -I http://\${CT_IP}:8080</code></p>
+      <p><code>curl -I http://\${CT_IP}</code></p>
     </main>
   </body>
 </html>
@@ -325,60 +315,28 @@ a2ensite ${SITE_SLUG}.conf >/dev/null
 apache2ctl configtest
 systemctl enable apache2
 systemctl restart apache2
-ss -tlnp | grep ':80' >/dev/null
-
-echo "[CT] Configuration Nginx..."
-mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-cat > /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf <<EOF
-server {
-    listen 8080;
-    listen [::]:8080;
-    server_name ${SITE_FQDN} \${CT_IP};
-
-    access_log /var/log/nginx/${SITE_SLUG}_access.log;
-    error_log  /var/log/nginx/${SITE_SLUG}_error.log;
-
-    location / {
-        proxy_pass http://127.0.0.1:80;
-        proxy_http_version 1.1;
-        proxy_set_header Host              \$http_host;
-        proxy_set_header X-Real-IP         \$remote_addr;
-        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host  \$host;
-        proxy_set_header X-Forwarded-Port  \$server_port;
-        proxy_set_header X-Forwarded-Server \$server_name;
-        proxy_set_header Connection "";
-    }
-}
-EOF
-
-ln -sf /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf /etc/nginx/sites-enabled/${SITE_SLUG}-proxy.conf
-nginx -t
-systemctl enable nginx
-systemctl restart nginx
-ss -tlnp | grep ':8080' >/dev/null
 
 echo "[CT] Validations locales..."
+ss -tlnp | grep ':53' >/dev/null
+ss -tlnp | grep ':80' >/dev/null
 dig @127.0.0.1 ${SITE_FQDN} +short
 dig @127.0.0.1 -x "\${CT_IP}" +short
 dig @127.0.0.1 google.com +short >/dev/null
 curl -fsSI "http://127.0.0.1" >/dev/null
 curl -fsSI -H "Host: ${SITE_FQDN}" "http://127.0.0.1" >/dev/null
-curl -fsSI "http://\${CT_IP}:8080" >/dev/null
 
 echo "[CT] Installation terminee."
 INNER
 
 echo "==> Copie et execution du script dans le CT ${CT_ID}..."
-pct push "${CT_ID}" /tmp/dns_apache_nginx_inner.sh /tmp/install.sh --perms 0755
+pct push "${CT_ID}" /tmp/dns_apache_inner.sh /tmp/install.sh --perms 0755
 pct exec "${CT_ID}" -- bash /tmp/install.sh
 
 CT_IP="$(pct exec "${CT_ID}" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "voir Proxmox")"
 
 echo ""
 echo "============================================="
-echo "  TP DNS + Apache2 + Nginx installe !"
+echo "  TP DNS + Apache2 installe !"
 echo "============================================="
 echo ""
 echo "  CT ID             : ${CT_ID}"
@@ -386,11 +344,10 @@ echo "  Nom du CT         : ${CT_HOSTNAME}"
 echo "  IP du CT          : ${CT_IP}"
 echo "  DNS local         : ${SITE_FQDN}"
 echo "  Apache2           : http://${SITE_FQDN}"
-echo "  Reverse proxy     : http://${CT_IP}:8080"
 echo ""
 echo "  Tests utiles :"
 echo "    pct enter ${CT_ID}"
 echo "    dig @127.0.0.1 ${SITE_FQDN}"
 echo "    curl -I http://${SITE_FQDN}"
-echo "    curl -I http://${CT_IP}:8080"
+echo "    curl -I http://${CT_IP}"
 echo ""
