@@ -24,7 +24,15 @@ SITE_NAME="${SITE_NAME:-monsite}"
 DNS_FORWARDER_1="${DNS_FORWARDER_1:-8.8.8.8}"
 DNS_FORWARDER_2="${DNS_FORWARDER_2:-1.1.1.1}"
 
-SITE_FQDN="${SITE_NAME}.${LAB_DOMAIN}"
+if [[ "${SITE_NAME}" == *.* ]]; then
+  SITE_FQDN="${SITE_NAME}"
+  SITE_HOST="${SITE_NAME%%.*}"
+else
+  SITE_HOST="${SITE_NAME}"
+  SITE_FQDN="${SITE_NAME}.${LAB_DOMAIN}"
+fi
+
+SITE_SLUG="${SITE_HOST//./-}"
 NS_FQDN="ns.${LAB_DOMAIN}"
 
 echo "==> Recherche d'un ID CT libre..."
@@ -83,7 +91,9 @@ set -euo pipefail
 
 LAB_DOMAIN="${LAB_DOMAIN}"
 SITE_NAME="${SITE_NAME}"
+SITE_HOST="${SITE_HOST}"
 SITE_FQDN="${SITE_FQDN}"
+SITE_SLUG="${SITE_SLUG}"
 NS_FQDN="${NS_FQDN}"
 DNS_FORWARDER_1="${DNS_FORWARDER_1}"
 DNS_FORWARDER_2="${DNS_FORWARDER_2}"
@@ -153,8 +163,8 @@ cat > /etc/bind/zones/db.${LAB_DOMAIN} <<EOF
 
 @       IN  NS      ${NS_FQDN}.
 ns      IN  A       \${CT_IP}
-${SITE_NAME}  IN  A \${CT_IP}
-www.${SITE_NAME} IN A \${CT_IP}
+${SITE_HOST}  IN  A \${CT_IP}
+www.${SITE_HOST} IN A \${CT_IP}
 EOF
 
 cat > "\${REV_FILE}" <<EOF
@@ -183,8 +193,8 @@ search ${LAB_DOMAIN}
 EOF
 
 echo "[CT] Configuration Apache2..."
-mkdir -p /var/www/${SITE_NAME}
-cat > /var/www/${SITE_NAME}/index.html <<EOF
+mkdir -p /var/www/${SITE_SLUG}
+cat > /var/www/${SITE_SLUG}/index.html <<EOF
 <!doctype html>
 <html lang="fr">
   <head>
@@ -259,39 +269,39 @@ cat > /var/www/${SITE_NAME}/index.html <<EOF
 </html>
 EOF
 
-cat > /etc/apache2/sites-available/${SITE_NAME}.conf <<EOF
+cat > /etc/apache2/sites-available/${SITE_SLUG}.conf <<EOF
 <VirtualHost *:80>
     ServerName ${SITE_FQDN}
     ServerAlias www.${SITE_FQDN}
 
-    DocumentRoot /var/www/${SITE_NAME}
+    DocumentRoot /var/www/${SITE_SLUG}
 
-    <Directory /var/www/${SITE_NAME}>
+    <Directory /var/www/${SITE_SLUG}>
         Options -Indexes +FollowSymLinks
         AllowOverride None
         Require all granted
     </Directory>
 
-    ErrorLog \${APACHE_LOG_DIR}/${SITE_NAME}_error.log
-    CustomLog \${APACHE_LOG_DIR}/${SITE_NAME}_access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/${SITE_SLUG}_error.log
+    CustomLog \${APACHE_LOG_DIR}/${SITE_SLUG}_access.log combined
 </VirtualHost>
 EOF
 
 a2dissite 000-default.conf >/dev/null 2>&1 || true
-a2ensite ${SITE_NAME}.conf >/dev/null
+a2ensite ${SITE_SLUG}.conf >/dev/null
 apache2ctl configtest
 systemctl enable apache2
 systemctl reload apache2
 
 echo "[CT] Configuration Nginx..."
 rm -f /etc/nginx/sites-enabled/default
-cat > /etc/nginx/sites-available/${SITE_NAME}-proxy.conf <<EOF
+cat > /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf <<EOF
 server {
     listen 8080;
     server_name ${SITE_FQDN} \${CT_IP};
 
-    access_log /var/log/nginx/${SITE_NAME}_access.log;
-    error_log  /var/log/nginx/${SITE_NAME}_error.log;
+    access_log /var/log/nginx/${SITE_SLUG}_access.log;
+    error_log  /var/log/nginx/${SITE_SLUG}_error.log;
 
     location / {
         proxy_pass http://127.0.0.1:80;
@@ -303,7 +313,7 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/${SITE_NAME}-proxy.conf /etc/nginx/sites-enabled/${SITE_NAME}-proxy.conf
+ln -sf /etc/nginx/sites-available/${SITE_SLUG}-proxy.conf /etc/nginx/sites-enabled/${SITE_SLUG}-proxy.conf
 nginx -t
 systemctl enable nginx
 systemctl restart nginx
